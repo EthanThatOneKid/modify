@@ -1,0 +1,115 @@
+name: Modify
+
+description: >-
+  On dispatch, based on given input data, make generic updates/modifications
+  (and add/replace/delete static files to a github repository) in a new dev
+  branch and also create a PR on the target branch in a repository all given in
+  the action inputs.
+
+inputs:
+  modifications:
+    description: >-
+      The modifications data in an array of dictionaries where each dictionary
+      with types file, add, set, replace, and delete using a switch case
+      statement.
+    required: true
+  repository:
+    description: The name of the target repository in the format "owner/repo".
+    required: true
+  pr-title:
+    description: The title of the pull request to be created.
+    default: Automated Modifications
+  pr-body:
+    description: The body of the pull request to be created.
+    default: This pull request was created automatically by the Modify action.
+  pr-assignees:
+    description: The list of GitHub usernames to assign to the pull request.
+    default: ""
+  pr-reviewers:
+    description: The list of GitHub usernames to request review from for the pull request.
+    default: ""
+  pr-labels:
+    description: The list of labels to add to the pull request.
+    default: ""
+  pr-draft:
+    description: Whether the pull request should be created as a draft.
+    default: false
+  target-branch:
+    description: The name of the target branch to merge the pull request into.
+    default: main
+  current-branch:
+    description: The name of the branch to create the pull request from.
+    default: modify-action
+
+outputs:
+  MODIFICATIONS_COUNT:
+    description: The number of modifications made to the repository.
+
+runs:
+  using: docker
+  image: "docker://alpine:latest"
+  steps:
+    - name: Checkout
+      uses: actions/checkout@v2
+      with:
+        repository: ${{ inputs.repository }}
+        ref: ${{ inputs.target-branch }}
+
+    - name: Install Dependencies
+      run: apk add curl jq sed
+
+    - name: Apply Modifications
+      id: apply-modifications
+      run: |
+        MODIFICATIONS_COUNT=0
+        for mod in "${{ inputs.modifications[@] }}"; do
+          case $mod[type] in
+            'file')
+              touch "${{ mod[filename] }}"
+              MODIFICATIONS_COUNT=$((MODIFICATIONS_COUNT+1))
+              ;;
+            'add')
+              echo "${{ mod[content] }}" >> "${{ mod[filename] }}"
+              MODIFICATIONS_COUNT=$((MODIFICATIONS_COUNT+1))
+              ;;
+            'set')
+              echo "${{ mod[content] }}" > "${{ mod[filename] }}"
+              MODIFICATIONS_COUNT=$((MODIFICATIONS_COUNT+1))
+              ;;
+            'replace')
+              sed -i -e "${{ mod[regex] }}" "${{ mod[replacement] }}" "${{ mod[filename] }}"
+              MODIFICATIONS_COUNT=$((MODIFICATIONS_COUNT+1))
+              ;;
+            'delete')
+              rm "${{ mod[filename] }}"
+              MODIFICATIONS_COUNT=$((MODIFICATIONS_COUNT+1))
+              ;;
+            'download')
+              curl -o "${{ mod[filename] }}" "${{ mod[url] }}"
+              MODIFICATIONS_COUNT=$((MODIFICATIONS_COUNT+1))
+              ;;
+          esac
+        done
+
+    - name: Commit Changes
+      run: |
+        git config --global user.email "modify-action@github.com"
+        git config --global user.name "Modify Action"
+        git checkout -b ${{ inputs.current-branch }}
+        git add .
+        git commit -m "Automated Modifications"
+        git push -u origin ${{ inputs.current-branch }}
+
+    - name: Create Pull Request
+      uses: peter-evans/create-pull-request@v3
+      with:
+        token: "${{ secrets.GITHUB_TOKEN }}"
+        commit-message: Automated Modifications
+        branch: "${{ inputs.current-branch }}"
+        title: "${{ inputs.pr-title }}"
+        body: "${{ inputs.pr-body }}"
+        labels: "${{ inputs.pr-labels }}"
+        assignees: "${{ inputs.pr-assignees }}"
+        reviewers: "${{ inputs.pr-reviewers }}"
+        base: "${{ inputs.target-branch }}"
+        draft: "${{ inputs.pr-draft }}"
